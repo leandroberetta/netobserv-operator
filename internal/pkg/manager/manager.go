@@ -60,6 +60,7 @@ type Manager struct {
 	Client      client.Client
 	Status      *status.Manager
 	Config      *Config
+	TLSObserver interface{} // Will be *tls.Observer, but we can't import it here to avoid cycle
 }
 
 func NewManager(

@@ -26,6 +26,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/ebpf"
 	"github.com/netobserv/netobserv-operator/internal/controller/lokistack"
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
+	tlsutil "github.com/netobserv/netobserv-operator/internal/controller/tls"
 	"github.com/netobserv/netobserv-operator/internal/pkg/cleanup"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
@@ -45,15 +46,24 @@ type FlowCollectorReconciler struct {
 	watcher          *watchers.Watcher
 	ctrl             controller.Controller
 	lokistackWatcher *lokistack.Watcher
+	tlsObserver      *tlsutil.Observer
 }
 
 func Start(ctx context.Context, mgr *manager.Manager) (manager.PostCreateHook, error) {
 	log := log.FromContext(ctx)
 	log.Info("Starting FlowCollector controller")
+
+	// Get TLS observer from manager (type assert from interface{})
+	var tlsObserver *tlsutil.Observer
+	if mgr.TLSObserver != nil {
+		tlsObserver = mgr.TLSObserver.(*tlsutil.Observer)
+	}
+
 	r := FlowCollectorReconciler{
-		Client: mgr.Client,
-		mgr:    mgr,
-		status: mgr.Status.ForComponent(status.FlowCollectorController),
+		Client:      mgr.Client,
+		mgr:         mgr,
+		status:      mgr.Status.ForComponent(status.FlowCollectorController),
+		tlsObserver: tlsObserver,
 	}
 
 	builder := ctrl.NewControllerManagedBy(mgr.Manager).
@@ -147,7 +157,11 @@ func (r *FlowCollectorReconciler) reconcile(ctx context.Context, clh *helper.Cli
 	ns := desired.Spec.GetNamespace()
 	previousNamespace := r.status.GetDeployedNamespace(desired)
 	lokiConfig := helper.NewLokiConfig(&desired.Spec.Loki, ns)
-	reconcilersInfo := r.newCommonInfo(clh, ns, &lokiConfig)
+
+	// Get current TLS profile from observer (updated dynamically)
+	tlsConfig := r.tlsObserver.GetCurrent()
+
+	reconcilersInfo := r.newCommonInfo(clh, ns, &lokiConfig, tlsConfig)
 
 	if err := r.checkFinalizer(ctx, desired); err != nil {
 		return err
@@ -224,13 +238,14 @@ func (r *FlowCollectorReconciler) checkFinalizer(ctx context.Context, desired *f
 	return nil
 }
 
-func (r *FlowCollectorReconciler) newCommonInfo(clh *helper.Client, ns string, loki *helper.LokiConfig) reconcilers.Common {
+func (r *FlowCollectorReconciler) newCommonInfo(clh *helper.Client, ns string, loki *helper.LokiConfig, tlsConfig *tlsutil.ProfileConfig) reconcilers.Common {
 	return reconcilers.Common{
 		Client:       *clh,
 		Namespace:    ns,
 		ClusterInfo:  r.mgr.ClusterInfo,
 		Watcher:      r.watcher,
 		Loki:         loki,
+		TLSConfig:    tlsConfig,
 		IsDownstream: r.mgr.Config.DownstreamDeployment,
 	}
 }

@@ -44,6 +44,7 @@ import (
 	apiregv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -55,6 +56,7 @@ import (
 	metricsv1alpha1 "github.com/netobserv/netobserv-operator/api/flowmetrics/v1alpha1"
 	controllers "github.com/netobserv/netobserv-operator/internal/controller"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
+	tlsutil "github.com/netobserv/netobserv-operator/internal/controller/tls"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
 	//+kubebuilder:scaffold:imports
@@ -166,11 +168,55 @@ func main() {
 		c.NextProtos = []string{"http/1.1"}
 	}
 
+	// composeTLSOpts combines TLS profile with HTTP/2 mitigation
+	composeTLSOpts := func(tlsConfig *tlsutil.ProfileConfig) []func(*tls.Config) {
+		if tlsConfig == nil {
+			return []func(*tls.Config){disableHTTP2}
+		}
+		return []func(*tls.Config){
+			tlsConfig.AsTLSOption(),
+			disableHTTP2,
+		}
+	}
+
 	var metricsCertWatcher *certwatcher.CertWatcher
 	cfg := ctrl.GetConfigOrDie()
+
+	// Create a cancellable context for graceful shutdown on TLS profile changes
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+	defer cancel()
+
+	// Fetch TLS profile from cluster (OpenShift only)
+	client, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Failed to create client for TLS profile fetch")
+		os.Exit(1)
+	}
+
+	tlsProfile, err := tlsutil.FetchTLSProfile(ctx, client)
+	if err != nil {
+		setupLog.Error(err, "Failed to fetch TLS profile from cluster, using defaults")
+	} else if tlsProfile == nil {
+		setupLog.Info("Not running on OpenShift, TLS profile not available. Using defaults for operator servers.")
+	}
+
+	var tlsConfig *tlsutil.ProfileConfig
+	if tlsProfile != nil {
+		tlsConfig, err = tlsutil.ConvertToConfig(tlsProfile)
+		if err != nil {
+			setupLog.Error(err, "Failed to convert TLS profile, using defaults")
+			tlsConfig = nil
+		} else {
+			setupLog.Info("Successfully applied cluster TLS profile to operator servers", "type", tlsProfile.Type)
+		}
+	}
+
+	// Compose TLS options: cluster profile + disable HTTP/2
+	tlsOpts := composeTLSOpts(tlsConfig)
+
 	metricsOptions := server.Options{
 		BindAddress:    metricsAddr,
-		TLSOpts:        []func(*tls.Config){disableHTTP2},
+		TLSOpts:        tlsOpts,
 		FilterProvider: filters.WithAuthenticationAndAuthorization,
 	}
 	if len(metricsCertFile) > 0 && len(metricsCertKeyFile) > 0 {
@@ -197,7 +243,7 @@ func main() {
 		Metrics: metricsOptions,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:    constants.WebhookPort,
-			TLSOpts: []func(*tls.Config){disableHTTP2},
+			TLSOpts: tlsOpts,
 		}),
 		PprofBindAddress:       pprofAddr,
 		HealthProbeBindAddress: probeAddr,
@@ -207,6 +253,21 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to setup manager")
 		os.Exit(1)
+	}
+
+	// Create TLS profile observer and register it with the manager
+	// This watches for changes to the cluster TLS profile
+	// When TLS profile changes, it triggers graceful shutdown to reload config
+	tlsObserver := tlsutil.NewObserver(mgr.GetClient(), tlsConfig, cancel)
+	mgr.TLSObserver = tlsObserver
+
+	// Setup TLS observer controller to watch APIServer changes
+	if err = tlsObserver.SetupWithManager(mgr); err != nil {
+		// This is not fatal - if we're not on OpenShift, the APIServer resource won't exist
+		// and that's OK, we just won't have dynamic TLS profile updates
+		setupLog.Info("TLS profile observer not registered (likely not on OpenShift)", "error", err.Error())
+	} else {
+		setupLog.Info("TLS profile observer registered successfully")
 	}
 
 	if err = (&flowsv1beta2.FlowCollector{}).SetupWebhookWithManager(mgr); err != nil {
@@ -236,7 +297,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

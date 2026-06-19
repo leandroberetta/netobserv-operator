@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
+	tlsutil "github.com/netobserv/netobserv-operator/internal/controller/tls"
 	"github.com/netobserv/netobserv-operator/internal/pkg/cluster"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
@@ -18,6 +19,7 @@ type Common struct {
 	Namespace    string
 	ClusterInfo  *cluster.Info
 	Loki         *helper.LokiConfig
+	TLSConfig    *tlsutil.ProfileConfig
 	IsDownstream bool
 }
 

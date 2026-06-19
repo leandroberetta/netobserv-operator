@@ -66,6 +66,7 @@ func (b *transfoBuilder) deployment(annotations map[string]string) *appsv1.Deplo
 		pull,
 		transfoCertSecretName,
 		annotations,
+		b.info.TLSConfig,
 	)
 	replicas := b.desired.Processor.GetFLPReplicas()
 	return &appsv1.Deployment{

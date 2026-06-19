@@ -10,6 +10,7 @@ import (
 	"github.com/netobserv/flowlogs-pipeline/pkg/config"
 	flowslatest "github.com/netobserv/netobserv-operator/api/flowcollector/v1beta2"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
+	tlsutil "github.com/netobserv/netobserv-operator/internal/controller/tls"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/volumes"
 
@@ -101,6 +102,7 @@ func podTemplate(
 	netType flowNetworkType,
 	certSecretName string,
 	annotations map[string]string,
+	tlsConfig *tlsutil.ProfileConfig,
 ) corev1.PodTemplateSpec {
 	advancedConfig := helper.GetAdvancedProcessorConfig(desired)
 	var ports []corev1.ContainerPort
@@ -156,6 +158,11 @@ func podTemplate(
 	}
 	envs = append(envs, constants.EnvNoHTTP2)
 
+	// Add TLS profile env vars from cluster
+	if tlsConfig != nil {
+		envs = append(envs, tlsConfig.ToEnvVars()...)
+	}
+
 	envs = helper.EnvFromReqsLimits(envs, &desired.Processor.Resources)
 
 	// Build args - only include k8scache flags when centralized informers are enabled
@@ -181,7 +188,6 @@ func podTemplate(
 			},
 		},
 	}})
-
 	container := corev1.Container{
 		Name:            constants.FLPName,
 		Image:           imageName,

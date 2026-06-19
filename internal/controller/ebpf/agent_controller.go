@@ -290,6 +290,11 @@ func (c *AgentController) desired(ctx context.Context, coll *flowslatest.FlowCol
 		}
 	}
 
+	// Add TLS profile env vars from cluster
+	if c.TLSConfig != nil {
+		env = append(env, c.TLSConfig.ToEnvVars()...)
+	}
+
 	volumeMounts := c.volumes.GetMounts()
 	volumes := c.volumes.GetVolumes()
 

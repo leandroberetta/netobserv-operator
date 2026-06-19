@@ -26,6 +26,7 @@ import (
 	cfg "github.com/netobserv/netobserv-operator/internal/controller/consoleplugin/config"
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/controller/reconcilers"
+	tlsutil "github.com/netobserv/netobserv-operator/internal/controller/tls"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper/loki"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
@@ -247,7 +248,7 @@ func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
 				ImagePullPolicy: corev1.PullPolicy(b.desired.ConsolePlugin.ImagePullPolicy),
 				Resources:       *b.desired.ConsolePlugin.Resources.DeepCopy(),
 				VolumeMounts:    b.volumes.AppendMounts(volumeMounts),
-				Env:             []corev1.EnvVar{constants.EnvNoHTTP2},
+				Env:             buildEnvVars(b.info.TLSConfig),
 				Args:            args,
 				SecurityContext: helper.ContainerDefaultSecurityContext(),
 			}},
@@ -710,6 +711,14 @@ func (b *builder) configMap(ctx context.Context, externalRecordingAnnotations ma
 	}
 	digest := strconv.FormatUint(hasher.Sum64(), 36)
 	return &configMap, digest, nil
+}
+
+func buildEnvVars(tlsConfig *tlsutil.ProfileConfig) []corev1.EnvVar {
+	envs := []corev1.EnvVar{constants.EnvNoHTTP2}
+	if tlsConfig != nil {
+		envs = append(envs, tlsConfig.ToEnvVars()...)
+	}
+	return envs
 }
 
 func (b *builder) serviceAccount(name string) *corev1.ServiceAccount {
