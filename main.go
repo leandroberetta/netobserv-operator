@@ -272,16 +272,9 @@ func setupTLSProfileWatcher(mgr *manager.Manager, stop context.CancelFunc) error
 		return nil
 	}
 	setupLog.Info("Setting up TLS profile watcher for graceful restart on profile changes")
-	// Known self-healing behavior: on a TLS profile change the operator reloads by exiting 0
-	// (graceful) so it restarts with the new profile. The baseline profile compared against is
-	// re-captured on every container start (InitialTLSProfileSpec above). During a control-plane
-	// rollout — especially two overlapping profile changes — a freshly started container can read
-	// a stale/lagging APIServer value as its baseline and is then forced to reload once the real
-	// value settles. Because this repeats per restart within the rollout window, several graceful
-	// (exit 0) reloads can cluster together, and kubelet flags the clustered restarts as
-	// CrashLoopBackOff regardless of exit code. This is cosmetic and self-heals: each reload is a
-	// correct reaction (the container really had the wrong profile), and once the rollout settles
-	// the operator comes up stable.
+	// ClusterInfo stabilizes the startup profile before the manager is created, so this baseline
+	// matches the profile used to configure the operator's servers. Later changes still reach the
+	// callback below and trigger a graceful reload.
 	return (&tlspkg.SecurityProfileWatcher{
 		Client:                mgr.GetClient(),
 		InitialTLSProfileSpec: *tlsProfileSpec,
