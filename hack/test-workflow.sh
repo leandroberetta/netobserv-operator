@@ -108,10 +108,10 @@ expect_image_tagged "quay.io/netobserv/network-observability-operator:$short_sha
 
 run_step "push_image.yml" "push-image" "build bundle"
 expect_image_tagged "quay.io/netobserv/network-observability-operator-bundle:v0.0.0-main"
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator:main" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent:main" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline:main" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:main" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin@sha256:" 6
 
 run_step "push_image.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_occurrences_at_least $test_out "quay.io/netobserv/network-observability-operator-bundle:v0.0.0-main" 1
