@@ -511,6 +511,7 @@ bundle-nogen: YQ OPSDK kustomize set-manager-images ## Generate final bundle fil
 	for file in $$(grep -rl 'SUBJECT_PLACEHOLDER' $(BUNDLE_OUT)/manifests/); do \
 		$(YQ) -i '.subjects = []' "$$file"; \
 	done
+	$(YQ) -i '.metadata.annotations.containerImage = (.spec.install.spec.deployments[] | select(.name == "netobserv-controller-manager").spec.template.spec.containers[] | select(.name == "manager").image)' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml
 # Restore previous date?
 ifneq ("$(BUNDLE_SET_DATE)", "true")
 	$(SED) -i 's/createdAt:.*/createdAt: ${BUNDLE_STORED_DATE}/' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml

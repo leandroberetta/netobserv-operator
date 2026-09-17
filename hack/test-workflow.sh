@@ -3,6 +3,7 @@
 test_out="test.out"
 bundle_csv="bundle/manifests/netobserv-operator.clusterserviceversion.yaml"
 short_sha=$(git rev-parse --short=8 HEAD)
+# Digest tests need a release whose operator and related images exist in Quay.
 release_tag="1.12.0-community"
 
 clean_up() {
@@ -75,6 +76,41 @@ expect_occurrences_at_least() {
   fi
 }
 
+expect_digest_field() {
+  query=$1
+  image=$2
+  label=$3
+  reference=$(yq "$query" "$bundle_csv")
+  digest=${reference#"$image"@}
+
+  if [[ "$reference" != "$image@$digest" || ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "❌ Failure: expected $label to contain a complete digest reference, found \"$reference\"."
+      exit 1
+  fi
+}
+
+expect_pinned_bundle_images() {
+  operator_image="quay.io/netobserv/network-observability-operator"
+  bpf_image="quay.io/netobserv/netobserv-ebpf-agent"
+  flp_image="quay.io/netobserv/flowlogs-pipeline"
+  plugin_image="quay.io/netobserv/network-observability-console-plugin"
+  deployment='.spec.install.spec.deployments[] | select(.name == "netobserv-controller-manager")'
+  container="$deployment.spec.template.spec.containers[] | select(.name == \"manager\")"
+
+  expect_digest_field '.metadata.annotations.containerImage' "$operator_image" 'containerImage annotation'
+  expect_digest_field "$container.image" "$operator_image" 'operator deployment image'
+  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_EBPF_AGENT\").value" "$bpf_image" 'eBPF environment image'
+  expect_digest_field '.spec.relatedImages[] | select(.name == "ebpf-agent").image' "$bpf_image" 'eBPF related image'
+  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_FLOWLOGS_PIPELINE\").value" "$flp_image" 'FLP environment image'
+  expect_digest_field '.spec.relatedImages[] | select(.name == "flowlogs-pipeline").image' "$flp_image" 'FLP related image'
+  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE\").value" "$plugin_image" 'console environment image'
+  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console").image' "$plugin_image" 'console related image'
+  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF4\").value" "$plugin_image" 'PF4 console environment image'
+  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf4").image' "$plugin_image" 'PF4 console related image'
+  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF5\").value" "$plugin_image" 'PF5 console environment image'
+  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf5").image' "$plugin_image" 'PF5 console related image'
+}
+
 echo -e "🥁🥁🥁 TESTING push_image_pr.yml 🥁🥁🥁"
 
 # we only test images here as manifest-build need images to be pushed
@@ -108,10 +144,7 @@ expect_image_tagged "quay.io/netobserv/network-observability-operator:$short_sha
 
 run_step "push_image.yml" "push-image" "build bundle"
 expect_image_tagged "quay.io/netobserv/network-observability-operator-bundle:v0.0.0-main"
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin@sha256:" 6
+expect_pinned_bundle_images
 
 run_step "push_image.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_occurrences_at_least $test_out "quay.io/netobserv/network-observability-operator-bundle:v0.0.0-main" 1
@@ -137,10 +170,7 @@ expect_image_tagged "quay.io/netobserv/network-observability-operator:$release_t
 
 run_step "release.yml" "push-image" "build bundle"
 expect_image_tagged "quay.io/netobserv/network-observability-operator-bundle:v$release_tag"
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline@sha256:" 2
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin@sha256:" 6
+expect_pinned_bundle_images
 
 run_step "release.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_occurrences_at_least $test_out "quay.io/netobserv/network-observability-operator-bundle:v$release_tag" 1
