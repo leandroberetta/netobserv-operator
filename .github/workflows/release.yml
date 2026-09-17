@@ -63,7 +63,10 @@ jobs:
 
       - name: build bundle
         run: |
-          IMAGE_ORG=${{ env.WF_ORG }} \
+          operator_digest=$(docker buildx imagetools inspect ${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.tag }} \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+          IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}@$operator_digest \
+            IMAGE_ORG=${{ env.WF_ORG }} \
             VERSION=${{ env.tag }} \
             BUNDLE_VERSION=${{ env.tag }} \
             BUNDLE_TARGET=OpenShift \
