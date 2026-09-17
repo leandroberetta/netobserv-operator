@@ -66,6 +66,7 @@ jobs:
           IMAGE_ORG=${{ env.WF_ORG }} \
             VERSION=${{ env.tag }} \
             BUNDLE_VERSION=${{ env.tag }} \
+            BUNDLE_TARGET=OpenShift \
             CLEAN_BUILD=1 \
             PIN_DIGEST=true \
             make bundle-nogen bundle-build
