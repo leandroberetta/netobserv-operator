@@ -3,7 +3,7 @@
 test_out="test.out"
 bundle_csv="bundle/manifests/netobserv-operator.clusterserviceversion.yaml"
 short_sha=$(git rev-parse --short=8 HEAD)
-fake_tag="1.0.42"
+release_tag="1.12.0-community"
 
 clean_up() {
     ARG=$?
@@ -30,7 +30,7 @@ run_step() {
     | sed -r "s~\\$\{\{ env\.WF_IMAGE \}\}~network-observability-operator~g" \
     | sed -r "s~\\$\{\{ env\.WF_MULTIARCH_TARGETS \}\}~amd64 arm64 ppc64le s390x~g" \
     | sed -r "s~\\$\{\{ env\.short_sha \}\}~$short_sha~g" \
-    | sed -r "s~\\$\{\{ env\.tag \}\}~$fake_tag~g" \
+    | sed -r "s~\\$\{\{ env\.tag \}\}~$release_tag~g" \
   )
   step="$opts $step"
 
@@ -131,20 +131,20 @@ echo -e "🥁🥁🥁 TESTING release.yml 🥁🥁🥁"
 
 # we only test images here as manifest-build need images to be pushed
 run_step "release.yml" "push-image" "build operator"
-expect_image_tagged "quay.io/netobserv/network-observability-operator:$fake_tag-amd64"
-expect_image_tagged "quay.io/netobserv/network-observability-operator:$fake_tag-arm64"
-expect_image_tagged "quay.io/netobserv/network-observability-operator:$fake_tag-ppc64le"
+expect_image_tagged "quay.io/netobserv/network-observability-operator:$release_tag-amd64"
+expect_image_tagged "quay.io/netobserv/network-observability-operator:$release_tag-arm64"
+expect_image_tagged "quay.io/netobserv/network-observability-operator:$release_tag-ppc64le"
 
 run_step "release.yml" "push-image" "build bundle"
-expect_image_tagged "quay.io/netobserv/network-observability-operator-bundle:v$fake_tag"
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator:1." 2
-expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent:v0." 2
-expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline:v0." 2
-expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:v0." 2
+expect_image_tagged "quay.io/netobserv/network-observability-operator-bundle:v$release_tag"
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-operator@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline@sha256:" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin@sha256:" 6
 
 run_step "release.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
-expect_occurrences_at_least $test_out "quay.io/netobserv/network-observability-operator-bundle:v$fake_tag" 1
-expect_occurrences $test_out "quay.io/netobserv/network-observability-operator-catalog:v$fake_tag" 2
+expect_occurrences_at_least $test_out "quay.io/netobserv/network-observability-operator-bundle:v$release_tag" 1
+expect_occurrences $test_out "quay.io/netobserv/network-observability-operator-catalog:v$release_tag" 2
 
 echo -e "\n✅ Looks good to me!"
 
