@@ -86,11 +86,11 @@ func (d *TLSProfileRestartDebouncer) Start(ctx context.Context) error {
 			d.mu.Lock()
 			latest := *d.latest.DeepCopy()
 			changedAt := d.changedAt
-			d.mu.Unlock()
 
 			// An observation can race with the timer. Ensure a complete quiet period
 			// has elapsed since the latest one before deciding to restart.
 			if remaining := d.interval - time.Since(changedAt); remaining > 0 {
+				d.mu.Unlock()
 				timer.Reset(remaining)
 				timerC = timer.C
 				continue
@@ -98,6 +98,7 @@ func (d *TLSProfileRestartDebouncer) Start(ctx context.Context) error {
 			timerC = nil
 
 			if reflect.DeepEqual(d.applied, latest) {
+				d.mu.Unlock()
 				logger.Info("TLS profile returned to the applied configuration; reload is not needed")
 				continue
 			}
@@ -105,6 +106,7 @@ func (d *TLSProfileRestartDebouncer) Start(ctx context.Context) error {
 			logger.Info("TLS profile has stabilized, initiating graceful shutdown to reload",
 				"appliedProfile", d.applied, "newProfile", latest)
 			d.restart()
+			d.mu.Unlock()
 			return nil
 		}
 	}
