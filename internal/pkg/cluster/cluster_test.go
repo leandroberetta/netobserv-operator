@@ -30,12 +30,6 @@ func fastStartupBackoff() func() {
 	return func() { startupRetryBackoff = orig }
 }
 
-func fastTLSProfileStabilization() func() {
-	orig := startupTLSProfileStabilityInterval
-	startupTLSProfileStabilityInterval = 0
-	return func() { startupTLSProfileStabilityInterval = orig }
-}
-
 func TestIsOpenShiftVersionLessThan(t *testing.T) {
 	info := Info{openShiftVersion: semver.New("4.14.9"), ready: true}
 	b, _, err := info.IsOpenShiftVersionLessThan("4.15.0")
@@ -803,51 +797,4 @@ func TestIsTransientAPIError(t *testing.T) {
 	assert.True(t, isTransientAPIError(context.DeadlineExceeded))
 	assert.False(t, isTransientAPIError(k8serrors.NewForbidden(testAPIServerGR, "cluster", errors.New("x"))))
 	assert.False(t, isTransientAPIError(errors.New("some permanent error")))
-}
-
-func TestFetchStableTLSProfile(t *testing.T) {
-	defer fastTLSProfileStabilization()()
-
-	stale := &configv1.TLSSecurityProfile{Type: configv1.TLSProfileOldType}
-	settled := &configv1.TLSSecurityProfile{Type: configv1.TLSProfileModernType}
-	sequence := []*configv1.TLSSecurityProfile{stale, settled, settled}
-	calls := 0
-
-	got, err := fetchStableTLSProfile(context.Background(), func(context.Context) (*configv1.TLSSecurityProfile, error) {
-		profile := sequence[calls]
-		calls++
-		return profile, nil
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, settled, got)
-	assert.Equal(t, 3, calls, "the stale startup read must not become the baseline")
-}
-
-func TestFetchStableTLSProfileDetectsNilAsStable(t *testing.T) {
-	defer fastTLSProfileStabilization()()
-	calls := 0
-
-	got, err := fetchStableTLSProfile(context.Background(), func(context.Context) (*configv1.TLSSecurityProfile, error) {
-		calls++
-		return nil, nil
-	})
-
-	require.NoError(t, err)
-	assert.Nil(t, got)
-	assert.Equal(t, 2, calls)
-}
-
-func TestFetchStableTLSProfileWaitIsCancellable(t *testing.T) {
-	orig := startupTLSProfileStabilityInterval
-	startupTLSProfileStabilityInterval = time.Hour
-	defer func() { startupTLSProfileStabilityInterval = orig }()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := fetchStableTLSProfile(ctx, func(context.Context) (*configv1.TLSSecurityProfile, error) {
-		return &configv1.TLSSecurityProfile{Type: configv1.TLSProfileIntermediateType}, nil
-	})
-
-	assert.ErrorIs(t, err, context.Canceled)
 }

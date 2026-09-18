@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -83,9 +82,10 @@ func NewInfo(ctx context.Context, cfg *rest.Config, dcl *discovery.DiscoveryClie
 
 	logger := log.FromContext(ctx)
 	if info.IsOpenShift() {
-		tlsProfile, err := fetchStableTLSProfile(ctx, func(ctx context.Context) (*configv1.TLSSecurityProfile, error) {
-			return tlsconfig.FetchAPIServerTLSProfile(ctx, cfg)
-		})
+		tlsProfile, err := retryStartupAPICall(ctx, "TLS profile fetch", isTransientAPIError,
+			func(ctx context.Context) (*configv1.TLSSecurityProfile, error) {
+				return tlsconfig.FetchAPIServerTLSProfile(ctx, cfg)
+			})
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to fetch TLS profile: %w", err)
 		}
@@ -120,59 +120,6 @@ var startupRetryBackoff = wait.Backoff{
 	Jitter:   0.1,
 	Cap:      30 * time.Second,
 	Steps:    15,
-}
-
-// startupTLSProfileStabilityInterval is the quiet period required between two matching
-// APIServer TLS profile reads before the profile is used to configure the operator. This
-// prevents a stale read from a rolling control plane from becoming the watcher's startup
-// baseline. It is a variable so tests can replace the production interval.
-var startupTLSProfileStabilityInterval = 5 * time.Second
-
-// fetchStableTLSProfile waits for two consecutive matching reads. The fetches keep using the
-// existing bounded retry policy for transient API failures, while the stabilization wait itself
-// remains cancellable. Returning the settled value here is important: ClusterInfo uses it both
-// to configure the operator servers and as the SecurityProfileWatcher's startup baseline.
-func fetchStableTLSProfile(
-	ctx context.Context,
-	fetch func(context.Context) (*configv1.TLSSecurityProfile, error),
-) (*configv1.TLSSecurityProfile, error) {
-	logger := log.FromContext(ctx)
-	var previous *configv1.TLSSecurityProfile
-	hasPrevious := false
-
-	for {
-		current, err := retryStartupAPICall(ctx, "TLS profile fetch", isTransientAPIError, fetch)
-		if err != nil {
-			return nil, err
-		}
-
-		if hasPrevious && reflect.DeepEqual(previous, current) {
-			return current, nil
-		}
-
-		if hasPrevious {
-			logger.Info("APIServer TLS profile changed during startup; waiting for it to stabilize")
-		}
-		if current == nil {
-			previous = nil
-		} else {
-			previous = current.DeepCopy()
-		}
-		hasPrevious = true
-
-		timer := time.NewTimer(startupTLSProfileStabilityInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
 }
 
 // retryStartupAPICall runs op with the bounded startup backoff (startupRetryBackoff), retrying only

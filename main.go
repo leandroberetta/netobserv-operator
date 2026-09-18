@@ -25,6 +25,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"strconv"
+	"time"
 
 	bpfmaniov1alpha1 "github.com/bpfman/bpfman-operator/apis/v1alpha1"
 	lokiv1 "github.com/grafana/loki/operator/apis/loki/v1"
@@ -61,10 +62,13 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/controller/constants"
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager"
+	"github.com/netobserv/netobserv-operator/internal/pkg/tlsconfig"
 	//+kubebuilder:scaffold:imports
 )
 
 const app = constants.OperatorName
+
+const tlsProfileRestartDebounceInterval = 5 * time.Second
 
 var (
 	buildVersion = "unknown"
@@ -272,16 +276,17 @@ func setupTLSProfileWatcher(mgr *manager.Manager, stop context.CancelFunc) error
 		return nil
 	}
 	setupLog.Info("Setting up TLS profile watcher for graceful restart on profile changes")
-	// ClusterInfo stabilizes the startup profile before the manager is created, so this baseline
-	// matches the profile used to configure the operator's servers. Later changes still reach the
-	// callback below and trigger a graceful reload.
+	debouncer := tlsconfig.NewTLSProfileRestartDebouncer(*tlsProfileSpec, tlsProfileRestartDebounceInterval, stop)
+	if err := mgr.Add(debouncer); err != nil {
+		return fmt.Errorf("could not set up TLS profile restart debounce: %w", err)
+	}
 	return (&tlspkg.SecurityProfileWatcher{
 		Client:                mgr.GetClient(),
 		InitialTLSProfileSpec: *tlsProfileSpec,
 		OnProfileChange: func(_ context.Context, oldSpec, newSpec configv1.TLSProfileSpec) {
-			setupLog.Info("TLS profile has changed, initiating graceful shutdown to reload",
+			setupLog.Info("TLS profile has changed, waiting for it to stabilize before reloading",
 				"oldProfile", oldSpec, "newProfile", newSpec)
-			stop()
+			debouncer.Observe(newSpec)
 		},
 	}).SetupWithManager(mgr)
 }
