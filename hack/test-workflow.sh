@@ -29,6 +29,12 @@ run_step() {
     version=main
   fi
   related_version=$(cat .github/workflows/$file | ./bin/yq '.env.WF_RELIMG_VERSION // ""')
+  WF_ORG=$test_image_org
+  WF_VERSION=$version
+  WF_REGISTRY=$test_registry
+  WF_IMAGE=network-observability-operator
+  WF_MULTIARCH_TARGETS="amd64 arm64 ppc64le s390x"
+  WF_RELIMG_VERSION=$related_version
   step=$(cat .github/workflows/$file | ./bin/yq ".jobs.$job.steps[] | select(.name==\"$name\").run")
   step=$(echo "$step" \
     | sed -r "s~\\$\{\{ env\.WF_ORG \}\}~$test_image_org~g" \
