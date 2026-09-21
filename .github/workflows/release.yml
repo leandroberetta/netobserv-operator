@@ -63,8 +63,12 @@ jobs:
 
       - name: build bundle
         run: |
-          IMAGE_ORG=${{ env.WF_ORG }} \
+          # Upstream releases do not version PF compatibility images; pin their rolling tags by digest.
+          IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.tag }} \
+            IMAGE_ORG=${{ env.WF_ORG }} \
             VERSION=${{ env.tag }} \
+            PLG_PF4_VERSION=main-pf4 \
+            PLG_PF5_VERSION=main-pf5 \
             BUNDLE_VERSION=${{ env.tag }} \
             BUNDLE_TARGET=OpenShift \
             CLEAN_BUILD=1 \

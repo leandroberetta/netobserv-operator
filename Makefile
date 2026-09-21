@@ -18,6 +18,8 @@ REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_ORG)
 BUNDLE_VERSION ?= 1.12.0-community
 # console plugin
 export PLG_VERSION ?= v${BUNDLE_VERSION}
+PLG_PF4_VERSION ?= $(PLG_VERSION)-pf4
+PLG_PF5_VERSION ?= $(PLG_VERSION)-pf5
 # flowlogs-pipeline
 export FLP_VERSION ?= v${BUNDLE_VERSION}
 # eBPF agent
@@ -114,14 +116,13 @@ DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # When PIN_DIGEST is true, store all digests in variables, and export them to avoid
 # duplicate image inspections on nested make calls
-# Pinning assumes quay.io/netobserv images; currently not supported for fork builds (contributions are welcome)
 ifeq ("$(PIN_DIGEST)", "true")
 ifndef OPERATOR_DIGEST
 # would fail with podman, not supported so far (podman needs pull before running inspect) ; support can be added if needed, or through skopeo
 # podman pull $image && podman inspect $image --format '{{.Digest}}'
-OPERATOR_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-operator:$(VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
+OPERATOR_DIGEST := $(shell docker buildx imagetools inspect $(IMAGE) --format '{{json .Manifest.Digest}}' | tr -d '"')
 endif
-$(info Pinning operator: $(VERSION) => $(OPERATOR_DIGEST))
+$(info Pinning operator: $(IMAGE) => $(OPERATOR_DIGEST))
 ifndef BPF_DIGEST
 BPF_DIGEST := $(shell docker buildx imagetools inspect quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
 endif
@@ -142,13 +143,13 @@ $(info Pinning standalone web console: $(PLG_VERSION) => $(SWC_DIGEST))
 # Only get pf4/5 digests for OpenShift bundles
 ifeq ("$(BUNDLE_TARGET)", "OpenShift")
 ifndef PLG_DIGEST_PF4
-PLG_DIGEST_PF4 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4 --format '{{json .Manifest.Digest}}' | tr -d '"')
+PLG_DIGEST_PF4 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_PF4_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
 endif
-$(info Pinning console plugin (pf4): $(PLG_VERSION)-pf4 => $(PLG_DIGEST_PF4))
+$(info Pinning console plugin (pf4): $(PLG_PF4_VERSION) => $(PLG_DIGEST_PF4))
 ifndef PLG_DIGEST_PF5
-PLG_DIGEST_PF5 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5 --format '{{json .Manifest.Digest}}' | tr -d '"')
+PLG_DIGEST_PF5 := $(shell docker buildx imagetools inspect quay.io/netobserv/network-observability-console-plugin:$(PLG_PF5_VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
 endif
-$(info Pinning console plugin (pf5): $(PLG_VERSION)-pf5 => $(PLG_DIGEST_PF5))
+$(info Pinning console plugin (pf5): $(PLG_PF5_VERSION) => $(PLG_DIGEST_PF5))
 endif
 
 export OPERATOR_DIGEST BPF_DIGEST FLP_DIGEST PLG_DIGEST PLG_DIGEST_PF4 PLG_DIGEST_PF5 SWC_DIGEST
@@ -159,6 +160,27 @@ endif
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
+
+.PHONY: validate-digests
+validate-digests:
+ifeq ("$(PIN_DIGEST)", "true")
+	@validate_digest() { \
+		local name="$$1" value="$$2"; \
+		if [[ ! "$$value" =~ ^sha256:[0-9a-f]{64}$$ ]]; then \
+			echo "Failed to resolve a valid $$name: $$value"; \
+			exit 1; \
+		fi; \
+	}; \
+	validate_digest OPERATOR_DIGEST "$(OPERATOR_DIGEST)"; \
+	validate_digest BPF_DIGEST "$(BPF_DIGEST)"; \
+	validate_digest FLP_DIGEST "$(FLP_DIGEST)"; \
+	validate_digest PLG_DIGEST "$(PLG_DIGEST)"; \
+	validate_digest SWC_DIGEST "$(SWC_DIGEST)"
+ifeq ("$(BUNDLE_TARGET)", "OpenShift")
+	@[[ "$(PLG_DIGEST_PF4)" =~ ^sha256:[0-9a-f]{64}$$ ]] || { echo "Failed to resolve a valid PLG_DIGEST_PF4: $(PLG_DIGEST_PF4)"; exit 1; }
+	@[[ "$(PLG_DIGEST_PF5)" =~ ^sha256:[0-9a-f]{64}$$ ]] || { echo "Failed to resolve a valid PLG_DIGEST_PF5: $(PLG_DIGEST_PF5)"; exit 1; }
+endif
+endif
 
 NAMESPACE ?= netobserv
 
@@ -446,7 +468,7 @@ install: kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/con
 uninstall: kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl --ignore-not-found=true delete -f - || true
 
-set-manager-images: kustomize ## Update image references
+set-manager-images: validate-digests kustomize ## Update image references
 ifeq ("$(PIN_DIGEST)", "true")
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG_BASE)@$(OPERATOR_DIGEST)
 	$(SED) -i -E "/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent@$(BPF_DIGEST)~}" ./config/manager/manager.yaml
@@ -457,13 +479,13 @@ ifeq ("$(BUNDLE_TARGET)", "OpenShift")
 	$(SED) -i -E "/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin@$(PLG_DIGEST_PF5)~}" ./config/openshift/common/manager-patch.yaml
 endif
 else
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMAGE}
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE)
 	$(SED) -i -E '/RELATED_IMAGE_EBPF_AGENT$$/{ n; s~value:.+$$~value: quay.io/netobserv/netobserv-ebpf-agent:$(BPF_VERSION)~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_FLOWLOGS_PIPELINE$$/{ n; s~value:.+$$~value: quay.io/netobserv/flowlogs-pipeline:$(FLP_VERSION)~}' ./config/manager/manager.yaml
 	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)~}' ./config/manager/manager.yaml
 ifeq ("$(BUNDLE_TARGET)", "OpenShift")
-	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf4~}' ./config/openshift/common/manager-patch.yaml
-	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_VERSION)-pf5~}' ./config/openshift/common/manager-patch.yaml
+	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF4$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_PF4_VERSION)~}' ./config/openshift/common/manager-patch.yaml
+	$(SED) -i -E '/RELATED_IMAGE_WEB_CONSOLE_PF5$$/{ n; s~value:.+$$~value: quay.io/netobserv/network-observability-console-plugin:$(PLG_PF5_VERSION)~}' ./config/openshift/common/manager-patch.yaml
 endif
 endif
 
@@ -616,7 +638,7 @@ related-release-notes: ## Grab release notes for related components (to be inser
 
 # Update helm templates
 .PHONY: helm-update
-helm-update: YQ ## Update helm template
+helm-update: validate-digests YQ ## Update helm template
 	$(SED) -i -E 's/^appVersion:.*/appVersion: $(BUNDLE_VERSION)/g' helm/Chart.yaml
 	$(SED) -i -E 's/^version:.*/version: $(BUNDLE_VERSION:%-community=%)/g' helm/Chart.yaml
 ifeq ("$(PIN_DIGEST)", "true")
