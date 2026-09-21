@@ -155,6 +155,12 @@ endif
 export OPERATOR_DIGEST BPF_DIGEST FLP_DIGEST PLG_DIGEST PLG_DIGEST_PF4 PLG_DIGEST_PF5 SWC_DIGEST
 endif
 
+ifeq ("$(PIN_DIGEST)", "true")
+BUNDLE_OPERATOR_IMAGE := $(IMAGE_TAG_BASE)@$(OPERATOR_DIGEST)
+else
+BUNDLE_OPERATOR_IMAGE := $(IMAGE)
+endif
+
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # This is a requirement for 'setup-envtest.sh' in the test target.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -522,7 +528,7 @@ bundle-nogen: YQ OPSDK kustomize set-manager-images ## Generate final bundle fil
 	done; \
 	( \
 		($(KUSTOMIZE) build config/csv \
-			| $(YQ) '.metadata.annotations.containerImage = "$(IMAGE)"' \
+			| $(YQ) '.metadata.annotations.containerImage = "$(BUNDLE_OPERATOR_IMAGE)"' \
 			| $(YQ) '.spec.description = load_str("$(BUNDLE_CONFIG)/description.md")' \
 		); \
 		echo "---"; $(KUSTOMIZE) build config/samples; \
@@ -533,7 +539,6 @@ bundle-nogen: YQ OPSDK kustomize set-manager-images ## Generate final bundle fil
 	for file in $$(grep -rl 'SUBJECT_PLACEHOLDER' $(BUNDLE_OUT)/manifests/); do \
 		$(YQ) -i '.subjects = []' "$$file"; \
 	done
-	$(YQ) -i '.metadata.annotations.containerImage = (.spec.install.spec.deployments[] | select(.name == "netobserv-controller-manager").spec.template.spec.containers[] | select(.name == "manager").image)' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml
 # Restore previous date?
 ifneq ("$(BUNDLE_SET_DATE)", "true")
 	$(SED) -i 's/createdAt:.*/createdAt: ${BUNDLE_STORED_DATE}/' $(BUNDLE_OUT)/manifests/netobserv-operator.clusterserviceversion.yaml
