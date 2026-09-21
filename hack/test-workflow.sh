@@ -7,6 +7,7 @@ bundle_csv=$openshift_bundle_csv
 test_registry="${TEST_REGISTRY:-quay.io/netobserv}"
 test_image_org="${TEST_IMAGE_ORG:-netobserv}"
 operator_image="$test_registry/network-observability-operator"
+official_operator_image="quay.io/netobserv/network-observability-operator"
 bundle_image="$operator_image-bundle"
 catalog_image="$operator_image-catalog"
 short_sha=$(git rev-parse --short=8 HEAD)
@@ -102,8 +103,8 @@ expect_pinned_bundle_images() {
   deployment='.spec.install.spec.deployments[] | select(.name == "netobserv-controller-manager")'
   container="$deployment.spec.template.spec.containers[] | select(.name == \"manager\")"
 
-  expect_digest_field '.metadata.annotations.containerImage' "$operator_image" 'containerImage annotation'
-  expect_digest_field "$container.image" "$operator_image" 'operator deployment image'
+  expect_digest_field '.metadata.annotations.containerImage' "$official_operator_image" 'containerImage annotation'
+  expect_digest_field "$container.image" "$official_operator_image" 'operator deployment image'
   expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_EBPF_AGENT\").value" "$bpf_image" 'eBPF environment image'
   expect_digest_field '.spec.relatedImages[] | select(.name == "ebpf-agent").image' "$bpf_image" 'eBPF related image'
   expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_FLOWLOGS_PIPELINE\").value" "$flp_image" 'FLP environment image'

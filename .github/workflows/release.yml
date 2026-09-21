@@ -63,8 +63,7 @@ jobs:
 
       - name: build bundle
         run: |
-          IMAGE=${{ env.WF_REGISTRY }}/${{ env.WF_IMAGE }}:${{ env.tag }} \
-            IMAGE_ORG=${{ env.WF_ORG }} \
+          IMAGE_ORG=${{ env.WF_ORG }} \
             VERSION=${{ env.tag }} \
             BUNDLE_VERSION=${{ env.tag }} \
             CLEAN_BUILD=1 \
