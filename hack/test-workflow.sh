@@ -1,7 +1,9 @@
 #!/bin/bash
 
 test_out="test.out"
-bundle_csv="bundles/openshift/manifests/netobserv-operator.clusterserviceversion.yaml"
+openshift_bundle_csv="bundles/openshift/manifests/netobserv-operator.clusterserviceversion.yaml"
+k8s_bundle_csv="bundles/k8s/manifests/netobserv-operator.clusterserviceversion.yaml"
+bundle_csv=$openshift_bundle_csv
 test_registry="${TEST_REGISTRY:-quay.io/netobserv}"
 test_image_org="${TEST_IMAGE_ORG:-netobserv}"
 operator_image="$test_registry/network-observability-operator"
@@ -93,6 +95,7 @@ expect_digest_field() {
 }
 
 expect_pinned_bundle_images() {
+  include_pf=${1:-false}
   bpf_image="quay.io/netobserv/netobserv-ebpf-agent"
   flp_image="quay.io/netobserv/flowlogs-pipeline"
   plugin_image="quay.io/netobserv/network-observability-console-plugin"
@@ -107,10 +110,12 @@ expect_pinned_bundle_images() {
   expect_digest_field '.spec.relatedImages[] | select(.name == "flowlogs-pipeline").image' "$flp_image" 'FLP related image'
   expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE\").value" "$plugin_image" 'console environment image'
   expect_digest_field '.spec.relatedImages[] | select(.name == "web-console").image' "$plugin_image" 'console related image'
-  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF4\").value" "$plugin_image" 'PF4 console environment image'
-  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf4").image' "$plugin_image" 'PF4 console related image'
-  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF5\").value" "$plugin_image" 'PF5 console environment image'
-  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf5").image' "$plugin_image" 'PF5 console related image'
+  if [[ $include_pf == true ]]; then
+    expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF4\").value" "$plugin_image" 'PF4 console environment image'
+    expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf4").image' "$plugin_image" 'PF4 console related image'
+    expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF5\").value" "$plugin_image" 'PF5 console environment image'
+    expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf5").image' "$plugin_image" 'PF5 console related image'
+  fi
 }
 
 echo -e "🥁🥁🥁 TESTING build_image_pr.yml 🥁🥁🥁"
@@ -147,7 +152,7 @@ expect_image_tagged "$operator_image:$short_sha-s390x"
 
 run_step "push_image.yml" "push-image" "build bundle"
 expect_image_tagged "$bundle_image:v0.0.0-sha-main"
-expect_pinned_bundle_images
+expect_pinned_bundle_images true
 
 run_step "push_image.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_image_tagged "$catalog_image:v0.0.0-sha-main"
@@ -172,6 +177,7 @@ expect_image_tagged "$operator_image:$release_tag-amd64"
 expect_image_tagged "$operator_image:$release_tag-arm64"
 expect_image_tagged "$operator_image:$release_tag-ppc64le"
 
+bundle_csv=$k8s_bundle_csv
 run_step "release.yml" "push-image" "build bundle"
 expect_image_tagged "$bundle_image:v$release_tag"
 expect_pinned_bundle_images
