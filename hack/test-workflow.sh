@@ -80,45 +80,6 @@ expect_occurrences() {
   fi
 }
 
-expect_digest_field() {
-  query=$1
-  image=$2
-  label=$3
-  reference=$(./bin/yq "$query" "$bundle_csv")
-  digest=${reference#"$image"@}
-
-  if [[ "$reference" != "$image@$digest" || ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-      echo "❌ Failure: expected $label to contain a complete digest reference, found \"$reference\"."
-      exit 1
-  fi
-
-  echo "✅ $label: $reference"
-}
-
-expect_pinned_bundle_images() {
-  include_pf=${1:-false}
-  bpf_image="quay.io/netobserv/netobserv-ebpf-agent"
-  flp_image="quay.io/netobserv/flowlogs-pipeline"
-  plugin_image="quay.io/netobserv/network-observability-console-plugin"
-  deployment='.spec.install.spec.deployments[] | select(.name == "netobserv-controller-manager")'
-  container="$deployment.spec.template.spec.containers[] | select(.name == \"manager\")"
-
-  expect_digest_field '.metadata.annotations.containerImage' "$official_operator_image" 'containerImage annotation'
-  expect_digest_field "$container.image" "$official_operator_image" 'operator deployment image'
-  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_EBPF_AGENT\").value" "$bpf_image" 'eBPF environment image'
-  expect_digest_field '.spec.relatedImages[] | select(.name == "ebpf-agent").image' "$bpf_image" 'eBPF related image'
-  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_FLOWLOGS_PIPELINE\").value" "$flp_image" 'FLP environment image'
-  expect_digest_field '.spec.relatedImages[] | select(.name == "flowlogs-pipeline").image' "$flp_image" 'FLP related image'
-  expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE\").value" "$plugin_image" 'console environment image'
-  expect_digest_field '.spec.relatedImages[] | select(.name == "web-console").image' "$plugin_image" 'console related image'
-  if [[ $include_pf == true ]]; then
-    expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF4\").value" "$plugin_image" 'PF4 console environment image'
-    expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf4").image' "$plugin_image" 'PF4 console related image'
-    expect_digest_field "$container.env[] | select(.name == \"RELATED_IMAGE_WEB_CONSOLE_PF5\").value" "$plugin_image" 'PF5 console environment image'
-    expect_digest_field '.spec.relatedImages[] | select(.name == "web-console-pf5").image' "$plugin_image" 'PF5 console related image'
-  fi
-}
-
 echo -e "🥁🥁🥁 TESTING build_image_pr.yml 🥁🥁🥁"
 
 # we only test images here as manifest-build need images to be pushed
@@ -153,7 +114,12 @@ expect_image_tagged "$operator_image:$short_sha-s390x"
 
 run_step "push_image.yml" "push-image" "build bundle"
 expect_image_tagged "$bundle_image:v0.0.0-sha-main"
-expect_pinned_bundle_images true
+expect_occurrences $bundle_csv "$official_operator_image:main$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent:main$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline:main$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:main$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:main-pf4$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:main-pf5$" 2
 
 run_step "push_image.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_image_tagged "$catalog_image:v0.0.0-sha-main"
@@ -181,7 +147,10 @@ expect_image_tagged "$operator_image:$release_tag-ppc64le"
 bundle_csv=$k8s_bundle_csv
 run_step "release.yml" "push-image" "build bundle"
 expect_image_tagged "$bundle_image:v$release_tag"
-expect_pinned_bundle_images
+expect_occurrences $bundle_csv "$official_operator_image:${release_tag}$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/netobserv-ebpf-agent:v${release_tag}$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/flowlogs-pipeline:v${release_tag}$" 2
+expect_occurrences $bundle_csv "quay.io/netobserv/network-observability-console-plugin:v${release_tag}$" 2
 
 run_step "release.yml" "push-image" "build catalog" "OPM_OPTS=--permissive"
 expect_image_tagged "$catalog_image:v$release_tag"
