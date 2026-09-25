@@ -67,7 +67,7 @@ jobs:
             VERSION=${{ env.tag }} \
             BUNDLE_VERSION=${{ env.tag }} \
             CLEAN_BUILD=1 \
-            PIN_DIGEST=false \
+            PIN_DIGEST=true \
             make bundle-nogen bundle-build
 
       - name: push bundle to quay.io
