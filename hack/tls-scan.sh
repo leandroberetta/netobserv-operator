@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+
+# Run openshift/tls-scanner in the cluster and keep its reports locally.
+set -euo pipefail
+
+: "${TLS_SCANNER_IMAGE:?Set TLS_SCANNER_IMAGE to a pullable openshift/tls-scanner image}"
+
+scanner_namespace=${TLS_SCANNER_NAMESPACE:-netobserv}
+operator_namespace=${TLS_SCANNER_OPERATOR_NAMESPACE:-netobserv}
+scan_namespaces=${TLS_SCANNER_NAMESPACES:-netobserv,netobserv-privileged}
+output_root=${TLS_SCANNER_OUTPUT_DIR:-out/tls-scanner}
+parallel=${TLS_SCANNER_PARALLEL:-4}
+timeout_seconds=${TLS_SCANNER_TIMEOUT_SECONDS:-900}
+
+for command in oc jq; do
+    command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }
+done
+
+[[ $scanner_namespace =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "Invalid scanner namespace" >&2; exit 1; }
+[[ $operator_namespace =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "Invalid operator namespace" >&2; exit 1; }
+[[ $scan_namespaces =~ ^[a-z0-9,-]+$ ]] || { echo "Invalid namespace filter" >&2; exit 1; }
+[[ $TLS_SCANNER_IMAGE =~ ^[a-zA-Z0-9._/@:-]+$ ]] || { echo "Invalid scanner image" >&2; exit 1; }
+[[ $parallel =~ ^[1-9][0-9]*$ ]] || { echo "TLS_SCANNER_PARALLEL must be positive" >&2; exit 1; }
+[[ $timeout_seconds =~ ^[1-9][0-9]*$ ]] || { echo "TLS_SCANNER_TIMEOUT_SECONDS must be positive" >&2; exit 1; }
+
+oc get namespace "$scanner_namespace" >/dev/null
+oc get namespace "$operator_namespace" >/dev/null
+IFS=, read -ra namespaces <<< "$scan_namespaces"
+for namespace in "${namespaces[@]}"; do
+    oc get namespace "$namespace" >/dev/null
+done
+
+name="netobserv-tls-scan-$(date +%s)-$$"
+output_dir="$output_root/$name"
+work_dir=$(mktemp -d)
+manifest="$work_dir/scanner.yaml"
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    oc delete -f "$manifest" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    rm -rf "$work_dir"
+    exit "$status"
+}
+trap cleanup EXIT
+
+cat > "$manifest" <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: $name
+  namespace: $scanner_namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: $name
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["config.openshift.io"]
+    resources: ["apiservers"]
+    verbs: ["get"]
+  - apiGroups: ["operator.openshift.io"]
+    resources: ["ingresscontrollers"]
+    verbs: ["get"]
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["kubeletconfigs"]
+    verbs: ["list"]
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["privileged"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: $name
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: $name
+subjects:
+  - kind: ServiceAccount
+    name: $name
+    namespace: $scanner_namespace
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: $name
+  namespace: $operator_namespace
+spec:
+  podSelector:
+    matchLabels:
+      app: netobserv-operator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: $scanner_namespace
+          podSelector:
+            matchLabels:
+              netobserv-tls-scan: $name
+      ports:
+        - protocol: TCP
+          port: 9443
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $name
+  namespace: $scanner_namespace
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        netobserv-tls-scan: $name
+    spec:
+      serviceAccountName: $name
+      restartPolicy: Never
+      containers:
+        - name: scanner
+          image: $TLS_SCANNER_IMAGE
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /usr/local/bin/tls-scanner --all-pods --namespace-filter="$scan_namespaces" --pqc-check -j=$parallel --artifact-dir=/artifacts --json-file=/artifacts/results.json --csv-file=/artifacts/results.csv --junit-file=/artifacts/results.xml --log-file=/artifacts/scan.log
+              result=\$?
+              printf '%s\\n' "\$result" > /artifacts/exit-code
+              sleep 600
+              exit "\$result"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: artifacts
+              mountPath: /artifacts
+      volumes:
+        - name: artifacts
+          emptyDir: {}
+EOF
+
+echo "Scanning namespaces $scan_namespaces with $TLS_SCANNER_IMAGE"
+oc create -f "$manifest"
+
+started=$SECONDS
+pod=""
+while (( SECONDS - started < timeout_seconds )); do
+    pod=$(oc get pods -n "$scanner_namespace" -l "job-name=$name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [[ -n $pod ]] && oc exec -n "$scanner_namespace" "$pod" -- test -s /artifacts/exit-code >/dev/null 2>&1; then
+        break
+    fi
+    if [[ -n $pod ]]; then
+        phase=$(oc get pod -n "$scanner_namespace" "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        if [[ $phase == Failed || $phase == Succeeded ]]; then
+            echo "Scanner pod ended before writing results ($phase)" >&2
+            oc logs -n "$scanner_namespace" "$pod" --tail=60 >&2 || true
+            exit 1
+        fi
+        waiting=$(oc get pod -n "$scanner_namespace" "$pod" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)
+        case $waiting in
+            ErrImagePull|ImagePullBackOff|InvalidImageName|CreateContainerConfigError)
+                echo "Scanner pod cannot start ($waiting)" >&2
+                oc describe pod -n "$scanner_namespace" "$pod" >&2 || true
+                exit 1
+                ;;
+        esac
+    fi
+    sleep 5
+done
+
+if [[ -z $pod ]] || ! oc exec -n "$scanner_namespace" "$pod" -- test -s /artifacts/exit-code >/dev/null 2>&1; then
+    echo "Timed out waiting for tls-scanner results" >&2
+    [[ -z $pod ]] || oc logs -n "$scanner_namespace" "$pod" --tail=60 >&2 || true
+    exit 1
+fi
+
+mkdir -p "$output_dir"
+oc cp "$scanner_namespace/$pod:/artifacts/." "$output_dir"
+oc logs -n "$scanner_namespace" "$pod" > "$output_dir/job.log"
+
+scanner_exit=$(cat "$output_dir/exit-code")
+{
+    echo '# NetObserv TLS scan'
+    echo
+    echo "Namespaces: \`$scan_namespaces\`"
+    echo
+    echo "Run: \`$name\`"
+    echo
+    echo "Scanner exit code: \`$scanner_exit\`"
+    echo
+    echo '## Status counts'
+    echo
+    jq -r '[.ip_results[].port_results[]?.status] | group_by(.)[] | "- \(.[0]): \(length)"' "$output_dir/results.json"
+    echo
+    echo '## Ports'
+    echo
+    echo '| Namespace | Pod | Port | Status | TLS 1.3 | ML-KEM |'
+    echo '| --- | --- | ---: | --- | --- | --- |'
+    jq -r '.ip_results[] | . as $ip | (.port_results // [])[] | "| \($ip.pod.Namespace // "-") | \($ip.pod.Name // "-") | \(.port) | \(.status) | \(if .tls13_supported then "yes" else "-" end) | \(if .mlkem_supported then "yes" else "-" end) |"' "$output_dir/results.json"
+    echo
+    echo 'NO_TLS, FILTERED, and NO_PORTS need review: network policy and pod security can hide TLS listeners from the scanner.'
+} > "$output_dir/report.md"
+
+cp "$output_dir"/{results.json,results.csv,results.xml,scan.log,job.log,exit-code} "$output_root/"
+cp "$output_dir/report.md" "$output_root/report.md"
+
+cat "$output_dir/report.md"
+echo "Reports: $output_dir (JSON, CSV, JUnit, scanner log, Job log)"
+echo "Latest report: $output_root/report.md"
+exit "$scanner_exit"

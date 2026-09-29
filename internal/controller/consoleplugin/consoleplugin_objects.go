@@ -44,6 +44,7 @@ const configFile = "config.yaml"
 const configVolume = "config-volume"
 const configPath = "/opt/app-root/"
 const metricsSvcName = constants.PluginName + "-metrics"
+const serverPortName = "server"
 const metricsPortName = "metrics"
 
 type builder struct {
@@ -190,6 +191,18 @@ func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
 	args := []string{
 		"-loglevel", b.desired.ConsolePlugin.LogLevel,
 	}
+	ports := []corev1.ContainerPort{{
+		Name:          serverPortName,
+		ContainerPort: *b.advanced.Port,
+		Protocol:      corev1.ProtocolTCP,
+	}}
+	if name == constants.PluginName {
+		ports = append(ports, corev1.ContainerPort{
+			Name:          metricsPortName,
+			ContainerPort: constants.CPMetricsPort,
+			Protocol:      corev1.ProtocolTCP,
+		})
+	}
 	volumes := []corev1.Volume{}
 	volumeMounts := []corev1.VolumeMount{}
 
@@ -246,6 +259,7 @@ func (b *builder) podTemplate(name, cmDigest string) *corev1.PodTemplateSpec {
 				Name:                     name,
 				Image:                    b.info.Images[b.imageRef],
 				ImagePullPolicy:          corev1.PullPolicy(b.desired.ConsolePlugin.ImagePullPolicy),
+				Ports:                    ports,
 				Resources:                *b.desired.ConsolePlugin.Resources.DeepCopy(),
 				VolumeMounts:             b.volumes.AppendMounts(volumeMounts),
 				Env:                      helper.AppendTLSEnvVars([]corev1.EnvVar{constants.EnvNoHTTP2}, b.info.TLSConfig),

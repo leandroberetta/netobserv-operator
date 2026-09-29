@@ -2,6 +2,20 @@
 
 This document lists all required and optional TLS certificates for NetObserv. You can also refer to the [Helm chart templates](../helm/templates/certificates.yaml) for cert-manager.
 
+## Scan installed TLS endpoints
+
+Build and push an [OpenShift tls-scanner](https://github.com/openshift/tls-scanner) image to a registry that the cluster can pull from. Then run:
+
+```sh
+make tls-scanner TLS_SCANNER_IMAGE=registry.example.com/team/tls-scanner:tag
+```
+
+The target scans `netobserv` and `netobserv-privileged` with the PQC check enabled. It writes `report.md`, JSON, CSV, JUnit, and logs in a new run directory under `out/tls-scanner/`. It also copies the latest results to `out/tls-scanner/report.md` and the other files at that level. The target then removes its temporary Job, ServiceAccount, RBAC resources, and NetworkPolicy. The temporary NetworkPolicy allows only the scanner Job to reach the operator's TLS ports (9443 and 8443), avoiding a false `NO_TLS` result caused by the operator's normal ingress restrictions. The target needs permission to create NetworkPolicies and cluster RBAC, and to grant the temporary ServiceAccount use of the privileged SCC for port discovery. It does not change NetObserv workloads.
+
+For a different installation, set `TLS_SCANNER_NAMESPACE` to the namespace where the Job should run, `TLS_SCANNER_OPERATOR_NAMESPACE` to the namespace containing the operator, and `TLS_SCANNER_NAMESPACES` to the comma-separated namespaces to scan. `TLS_SCANNER_OUTPUT_DIR`, `TLS_SCANNER_PARALLEL`, and `TLS_SCANNER_TIMEOUT_SECONDS` are also configurable.
+
+Review `NO_TLS`, `FILTERED`, and `NO_PORTS` rows in the report. Network policies or pod security restrictions can keep the scanner from reaching a TLS endpoint, so a passing PQC result only covers endpoints it scanned successfully.
+
 ## Required certificates
 
 Those certificates are always required and are not configurable:

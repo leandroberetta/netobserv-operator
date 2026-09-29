@@ -189,6 +189,15 @@ endif
 
 NAMESPACE ?= netobserv
 
+TLS_SCANNER_IMAGE ?=
+TLS_SCANNER_NAMESPACE ?= $(NAMESPACE)
+TLS_SCANNER_OPERATOR_NAMESPACE ?= $(NAMESPACE)
+TLS_SCANNER_NAMESPACES ?= $(NAMESPACE),$(NAMESPACE)-privileged
+TLS_SCANNER_OUTPUT_DIR ?= out/tls-scanner
+TLS_SCANNER_PARALLEL ?= 4
+TLS_SCANNER_TIMEOUT_SECONDS ?= 900
+export TLS_SCANNER_IMAGE TLS_SCANNER_NAMESPACE TLS_SCANNER_OPERATOR_NAMESPACE TLS_SCANNER_NAMESPACES TLS_SCANNER_OUTPUT_DIR TLS_SCANNER_PARALLEL TLS_SCANNER_TIMEOUT_SECONDS
+
 all: help
 
 # build a single arch target provided as argument
@@ -232,6 +241,12 @@ endef
 
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+.PHONY: tls-scanner tls-scan
+tls-scanner: ## Scan NetObserv namespaces for TLS 1.3 and ML-KEM and save reports.
+	@bash ./hack/tls-scan.sh
+
+tls-scan: tls-scanner
 
 # Directories.
 
