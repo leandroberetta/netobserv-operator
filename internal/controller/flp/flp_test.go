@@ -2,8 +2,10 @@ package flp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/netobserv/flowlogs-pipeline/pkg/config"
@@ -15,6 +17,7 @@ import (
 	"github.com/netobserv/netobserv-operator/internal/pkg/helper"
 	"github.com/netobserv/netobserv-operator/internal/pkg/manager/status"
 	"github.com/netobserv/netobserv-operator/internal/pkg/metrics/alerts"
+	"github.com/netobserv/netobserv-operator/internal/pkg/tlsconfig"
 	v1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	"github.com/stretchr/testify/assert"
@@ -998,4 +1001,41 @@ func TestK8sCacheInformerTLSServerName(t *testing.T) {
 		}
 	}
 	assert.True(foundCA, "k8scache-server-ca volume should exist")
+}
+
+func TestInformerMetricsTLS(t *testing.T) {
+	cfg := getConfig()
+	cfg.Processor.InformerCacheProxy = &flowslatest.FlowCollectorInformerCacheProxy{Enabled: ptr.To(true)}
+	cfg.Processor.Metrics.Server.TLS.Type = flowslatest.TLSAuto
+
+	info := reconcilers.Common{
+		Namespace: testNamespace, ClusterInfo: &cluster.Info{},
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13},
+	}
+	b := newInformerBuilder(info.NewInstance(image, status.Instance{}), &cfg)
+	service := b.metricsService()
+	assert.Equal(t, informerMetricsServiceName, service.Name)
+	assert.Equal(t, informerMetricsServiceName, service.Annotations[constants.OpenShiftCertificateAnnotation])
+	assert.Equal(t, map[string]string{"app": informerName}, service.Spec.Selector)
+	assert.Equal(t, informerMetricsPort, service.Spec.Ports[0].Port)
+
+	deployment, err := b.deployment()
+	assert.NoError(t, err)
+	container := deployment.Spec.Template.Spec.Containers[0]
+	assert.Contains(t, container.Args, "--metrics-tls-cert-path=/var/informer-metrics-certs/tls.crt")
+	assert.Contains(t, container.Args, "--metrics-tls-key-path=/var/informer-metrics-certs/tls.key")
+	assert.Contains(t, container.Env, corev1.EnvVar{
+		Name: tlsconfig.EnvTLSMinVersion, Value: strconv.Itoa(int(tls.VersionTLS13)),
+	})
+	assert.Contains(t, deployment.Spec.Template.Spec.Volumes, corev1.Volume{
+		Name: "informer-metrics-certs",
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: informerMetricsServiceName,
+		}},
+	})
+
+	monitor := b.metricsServiceMonitor()
+	assert.Equal(t, informerMetricsServiceName, monitor.Name)
+	assert.Equal(t, v1.Scheme("https"), *monitor.Spec.Endpoints[0].Scheme)
+	assert.Equal(t, informerMetricsServiceName+"."+testNamespace+".svc", *monitor.Spec.Endpoints[0].TLSConfig.ServerName)
 }

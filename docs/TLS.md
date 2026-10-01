@@ -127,11 +127,11 @@ For mTLS, configure `spec.processor.service.providedCertificates.clientCert`. Fo
 
 ## Informers to Processor certificates
 
-When `spec.processor.informers.enabled` is `true`, informers communicate with processors via gRPC on port 9090 (k8scache). TLS can be configured for this communication.
+When `spec.processor.informerCacheProxy.enabled` is `true`, informers communicate with processors via gRPC on port 9402 (k8scache). TLS can be configured for this communication.
 
 ### Auto (TLS)
 
-When `spec.processor.informers.tls.type` is "Auto":
+When `spec.processor.informerCacheProxy.tls.type` is "Auto":
 
 <table>
   <thead>
@@ -147,9 +147,9 @@ When `spec.processor.informers.tls.type` is "Auto":
     <tr>
       <td>flowlogs-pipeline</td>
       <td>Secret</td>
-      <td>flowlogs-pipeline-cert</td>
+      <td>flowlogs-pipeline-k8scache-cert</td>
       <td>tls.crt, tls.key</td>
-      <td>Reuses the same certificate as the main gRPC service.</td>
+      <td>Issued for the dedicated k8scache Service.</td>
     </tr>
     <tr>
       <td>flowlogs-pipeline-informers</td>
@@ -163,7 +163,7 @@ When `spec.processor.informers.tls.type` is "Auto":
 
 ### Auto (mTLS)
 
-When `spec.processor.informers.tls.type` is "Auto-mTLS":
+When `spec.processor.informerCacheProxy.tls.type` is "Auto-mTLS":
 
 <table>
   <thead>
@@ -179,9 +179,9 @@ When `spec.processor.informers.tls.type` is "Auto-mTLS":
     <tr>
       <td>flowlogs-pipeline</td>
       <td>Secret</td>
-      <td>flowlogs-pipeline-cert</td>
+      <td>flowlogs-pipeline-k8scache-cert</td>
       <td>tls.crt, tls.key</td>
-      <td>Reuses the same certificate as the main gRPC service.</td>
+      <td>Issued for the dedicated k8scache Service.</td>
     </tr>
     <tr>
       <td>flowlogs-pipeline</td>
@@ -209,6 +209,10 @@ When `spec.processor.informers.tls.type` is "Auto-mTLS":
 
 ### Provided
 
-When `spec.processor.informers.tls.type` is "Provided", you can specify any Secret or ConfigMap for TLS or mTLS, via `spec.processor.informers.tls.providedCertificates`.
+When `spec.processor.informerCacheProxy.tls.type` is "Provided", you can specify any Secret or ConfigMap for TLS or mTLS, via `spec.processor.informerCacheProxy.tls.providedCertificates`.
 
 For mTLS, configure both `serverCert` and `clientCert`. For simple TLS, only configure `serverCert`.
+
+## Informer metrics
+
+The `flowlogs-pipeline-informers` metrics endpoint listens on port 9091. It uses the same TLS setting as `spec.processor.metrics.server.tls`. With `type: Auto` on OpenShift, the operator creates the `flowlogs-pipeline-informers-metrics` Service and mounts its serving certificate into the informer pods. Prometheus scrapes this endpoint over HTTPS. With `type: Provided`, the supplied certificate must also be valid for `flowlogs-pipeline-informers-metrics.<namespace>.svc`. With `type: Disabled`, the endpoint remains HTTP.

@@ -83,9 +83,22 @@ spec:
     kind: ClusterIssuer
     group: cert-manager.io
 ---
-# Certificate for k8scache client (flowlogs-pipeline-informers)
-# Note: k8scache server reuses the flowlogs-pipeline-cert certificate
-# since both gRPC ports use the same service DNS name
+# Certificate for the k8scache server in flowlogs-pipeline
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flowlogs-pipeline-k8scache-cert
+spec:
+  secretName: flowlogs-pipeline-k8scache-cert
+  dnsNames:
+  - flowlogs-pipeline-k8scache.{{ .Release.Namespace }}.svc
+  - flowlogs-pipeline-k8scache.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+  issuerRef:
+    name: netobserv-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# Certificate for the k8scache client (flowlogs-pipeline-informers)
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -93,6 +106,21 @@ metadata:
 spec:
   secretName: flowlogs-pipeline-informers-k8scache-client-cert
   commonName: netobserv-flowlogs-pipeline-informers
+  issuerRef:
+    name: netobserv-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# Certificate for flowlogs-pipeline-informers metrics
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flowlogs-pipeline-informers-metrics
+spec:
+  secretName: flowlogs-pipeline-informers-metrics
+  dnsNames:
+  - flowlogs-pipeline-informers-metrics.{{ .Release.Namespace }}.svc
+  - flowlogs-pipeline-informers-metrics.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
   issuerRef:
     name: netobserv-issuer
     kind: ClusterIssuer
