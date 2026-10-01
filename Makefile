@@ -189,7 +189,10 @@ endif
 
 NAMESPACE ?= netobserv
 
-TLS_SCANNER_IMAGE ?=
+TLS_SCANNER_REF ?= 2e9b3c377b31810bcfe0711a2eb492314e2464be
+TLS_SCANNER_SOURCE ?= out/tls-scanner-source
+TLS_SCANNER_IMAGE ?= $(REPO)/tls-scanner:$(TLS_SCANNER_REF)
+TLS_SCANNER_PLATFORM ?= linux/$(GOARCH)
 TLS_SCANNER_NAMESPACE ?= $(NAMESPACE)
 TLS_SCANNER_OPERATOR_NAMESPACE ?= $(NAMESPACE)
 TLS_SCANNER_NAMESPACES ?= $(NAMESPACE),$(NAMESPACE)-privileged,$(TLS_SCANNER_OPERATOR_NAMESPACE)
@@ -440,6 +443,22 @@ build: fmt lint ## Build manager binary.
 	GOARCH=${GOARCH} go build -mod vendor -o bin/manager main.go
 
 ##@ Images
+
+.PHONY: tls-scanner-image-build tls-scanner-image-push tls-scanner-image
+tls-scanner-image-build: ## Build a local tls-scanner image from the pinned upstream source.
+	@if ! git -C "$(TLS_SCANNER_SOURCE)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if [ -e "$(TLS_SCANNER_SOURCE)" ]; then echo "$(TLS_SCANNER_SOURCE) exists but is not a Git checkout" >&2; exit 1; fi; \
+		mkdir -p "$(dir $(TLS_SCANNER_SOURCE))"; \
+		git clone https://github.com/openshift/tls-scanner.git "$(TLS_SCANNER_SOURCE)"; \
+		git -C "$(TLS_SCANNER_SOURCE)" checkout --detach "$(TLS_SCANNER_REF)"; \
+	fi
+	$(OCI_BIN) build --platform "$(TLS_SCANNER_PLATFORM)" $(OCI_BUILD_OPTS) -f hack/tls-scanner.Dockerfile -t "$(TLS_SCANNER_IMAGE)" "$(TLS_SCANNER_SOURCE)"
+
+tls-scanner-image-push: ## Push a locally built tls-scanner image to its registry.
+	$(OCI_BIN) push "$(TLS_SCANNER_IMAGE)"
+
+tls-scanner-image: tls-scanner-image-build ## Build and push the tls-scanner image.
+	$(OCI_BIN) push "$(TLS_SCANNER_IMAGE)"
 
 # note: to build and push custom image tag use: IMAGE_ORG=myuser VERSION=dev make images
 .PHONY: image-build

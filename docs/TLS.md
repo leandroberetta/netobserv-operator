@@ -4,7 +4,14 @@ This document lists all required and optional TLS certificates for NetObserv. Yo
 
 ## Scan installed TLS endpoints
 
-Build and push an [OpenShift tls-scanner](https://github.com/openshift/tls-scanner) image to a registry that the cluster can pull from. Then run:
+Build and push an [OpenShift tls-scanner](https://github.com/openshift/tls-scanner) image to a registry that the cluster can pull from. The image target clones a pinned upstream revision into `out/tls-scanner-source/` on its first run, builds it locally with Docker or Podman, and pushes it to Quay by default:
+
+```sh
+make tls-scanner-image IMAGE_ORG=my-quay-namespace
+make tls-scanner IMAGE_ORG=my-quay-namespace
+```
+
+Set `TLS_SCANNER_IMAGE` to use another image name or tag, `TLS_SCANNER_SOURCE` to build an existing local checkout, or `TLS_SCANNER_PLATFORM` to select an architecture (default `linux/amd64`). The image build and push are also available separately as `tls-scanner-image-build` and `tls-scanner-image-push`. Authenticate to the registry with Docker or Podman before pushing. To run with an image that is already available, use:
 
 ```sh
 make tls-scanner TLS_SCANNER_IMAGE=registry.example.com/team/tls-scanner:tag

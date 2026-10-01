@@ -1,0 +1,35 @@
+# Build openshift/tls-scanner without its OpenShift CI-only base images.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -ldflags="-s -w" -o /usr/local/bin/tls-scanner ./cmd/tls-scanner
+
+FROM registry.access.redhat.com/ubi9/ubi:latest
+
+ARG OC_VERSION=latest
+ARG TARGETARCH=amd64
+ARG TESTSSL_VERSION=3.2.2
+
+RUN dnf -y update && \
+    dnf install -y --allowerasing binutils file jq tar openssl bash wget curl procps-ng hostname bind-utils net-tools coreutils socat && \
+    dnf clean all
+
+RUN wget -O "/tmp/openshift-client-linux.tar.gz" "https://mirror.openshift.com/pub/openshift-v4/${TARGETARCH}/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" && \
+    tar -C /usr/local/bin -xzf /tmp/openshift-client-linux.tar.gz oc && \
+    rm -f /tmp/openshift-client-linux.tar.gz
+
+RUN curl -fL "https://testssl.sh/testssl.sh-${TESTSSL_VERSION}.tar.gz" -o /tmp/testssl.tar.gz && \
+    mkdir -p /opt/testssl && \
+    tar -xzf /tmp/testssl.tar.gz -C /opt/testssl --strip-components=1 && \
+    chmod +x /opt/testssl/testssl.sh && \
+    ln -s /opt/testssl/testssl.sh /usr/local/bin/testssl.sh && \
+    rm -f /tmp/testssl.tar.gz
+
+COPY --from=builder /usr/local/bin/tls-scanner /usr/local/bin/tls-scanner
+ENTRYPOINT ["/usr/local/bin/tls-scanner"]
