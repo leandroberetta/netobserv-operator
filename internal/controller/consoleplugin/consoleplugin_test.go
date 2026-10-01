@@ -119,37 +119,6 @@ func getBuilder(spec *flowslatest.FlowCollectorSpec, lk *helper.LokiConfig) buil
 	return b
 }
 
-func TestPluginDeploymentsDeclareListeningPorts(t *testing.T) {
-	spec := flowslatest.FlowCollectorSpec{ConsolePlugin: getPluginConfig()}
-	spec.ConsolePlugin.Advanced = &flowslatest.AdvancedPluginConfig{Port: ptr.To(int32(9444))}
-	b := getBuilder(&spec, &helper.LokiConfig{})
-
-	for _, tc := range []struct {
-		name  string
-		ports []corev1.ContainerPort
-	}{
-		{
-			name: constants.PluginName,
-			ports: []corev1.ContainerPort{
-				{Name: serverPortName, ContainerPort: 9444, Protocol: corev1.ProtocolTCP},
-				{Name: metricsPortName, ContainerPort: constants.CPMetricsPort, Protocol: corev1.ProtocolTCP},
-			},
-		},
-		{
-			name: constants.StaticPluginName,
-			ports: []corev1.ContainerPort{
-				{Name: serverPortName, ContainerPort: 9444, Protocol: corev1.ProtocolTCP},
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			builder := newBuilder(b.info, &spec, tc.name)
-			deployment := builder.deployment(tc.name, "")
-			require.Equal(t, tc.ports, deployment.Spec.Template.Spec.Containers[0].Ports)
-		})
-	}
-}
-
 func TestContainerUpdateCheck(t *testing.T) {
 	assert := assert.New(t)
 

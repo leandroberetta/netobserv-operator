@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 
-# Run openshift/tls-scanner in the cluster and keep its reports locally.
+# Check PQC readiness and TLS profile adherence with openshift/tls-scanner.
 set -euo pipefail
 
 : "${TLS_SCANNER_IMAGE:?Set TLS_SCANNER_IMAGE to a pullable openshift/tls-scanner image}"
 
 scanner_namespace=${TLS_SCANNER_NAMESPACE:-netobserv}
 operator_namespace=${TLS_SCANNER_OPERATOR_NAMESPACE:-netobserv}
-scan_namespaces=${TLS_SCANNER_NAMESPACES:-netobserv,netobserv-privileged}
+scan_namespaces=${TLS_SCANNER_NAMESPACES:-netobserv,netobserv-privileged,$operator_namespace}
 output_root=${TLS_SCANNER_OUTPUT_DIR:-out/tls-scanner}
 parallel=${TLS_SCANNER_PARALLEL:-4}
-timeout_seconds=${TLS_SCANNER_TIMEOUT_SECONDS:-900}
+timeout_seconds=${TLS_SCANNER_TIMEOUT_SECONDS:-1800}
 
 for command in oc jq; do
     command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }
@@ -92,7 +92,7 @@ subjects:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: $name
+  name: $name-operator
   namespace: $operator_namespace
 spec:
   podSelector:
@@ -107,11 +107,38 @@ spec:
           podSelector:
             matchLabels:
               netobserv-tls-scan: $name
-      ports:
-        - protocol: TCP
-          port: 9443
-        - protocol: TCP
-          port: 8443
+EOF
+
+# NetObserv's ingress policies allow same-namespace traffic, but an isolated
+# scanner namespace needs explicit access to the operands in each scan namespace.
+declare -A policy_namespaces=()
+for namespace in "${namespaces[@]}"; do
+    [[ -n ${policy_namespaces[$namespace]:-} ]] && continue
+    policy_namespaces[$namespace]=1
+    cat >> "$manifest" <<EOF
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: $name
+  namespace: $namespace
+spec:
+  podSelector:
+    matchLabels:
+      part-of: netobserv-operator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: $scanner_namespace
+          podSelector:
+            matchLabels:
+              netobserv-tls-scan: $name
+EOF
+done
+
+cat >> "$manifest" <<EOF
 ---
 apiVersion: batch/v1
 kind: Job
@@ -134,8 +161,15 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
+              mkdir -p /artifacts/adherence
               /usr/local/bin/tls-scanner --all-pods --namespace-filter="$scan_namespaces" --pqc-check -j=$parallel --artifact-dir=/artifacts --json-file=/artifacts/results.json --csv-file=/artifacts/results.csv --junit-file=/artifacts/results.xml --log-file=/artifacts/scan.log
-              result=\$?
+              pqc_result=\$?
+              printf '%s\\n' "\$pqc_result" > /artifacts/pqc-exit-code
+              /usr/local/bin/tls-scanner --all-pods --namespace-filter="$scan_namespaces" -j=$parallel --artifact-dir=/artifacts/adherence --json-file=/artifacts/adherence/results.json --csv-file=/artifacts/adherence/results.csv --junit-file=/artifacts/adherence/results.xml --log-file=/artifacts/adherence/scan.log
+              adherence_result=\$?
+              printf '%s\\n' "\$adherence_result" > /artifacts/adherence-exit-code
+              result=0
+              if [ "\$pqc_result" -ne 0 ] || [ "\$adherence_result" -ne 0 ]; then result=1; fi
               printf '%s\\n' "\$result" > /artifacts/exit-code
               sleep 600
               exit "\$result"
@@ -194,6 +228,8 @@ oc cp "$scanner_namespace/$pod:/artifacts/." "$output_dir"
 oc logs -n "$scanner_namespace" "$pod" > "$output_dir/job.log"
 
 scanner_exit=$(cat "$output_dir/exit-code")
+pqc_exit=$(cat "$output_dir/pqc-exit-code")
+adherence_exit=$(cat "$output_dir/adherence-exit-code")
 {
     echo '# NetObserv TLS scan'
     echo
@@ -201,25 +237,39 @@ scanner_exit=$(cat "$output_dir/exit-code")
     echo
     echo "Run: \`$name\`"
     echo
-    echo "Scanner exit code: \`$scanner_exit\`"
+    echo "PQC check exit code: \`$pqc_exit\`"
     echo
-    echo '## Status counts'
+    echo "TLS profile adherence exit code: \`$adherence_exit\`"
     echo
-    jq -r '[.ip_results[].port_results[]?.status] | group_by(.)[] | "- \(.[0]): \(length)"' "$output_dir/results.json"
+    echo '## PQC scan status counts'
+    echo
+    jq -r '[.ip_results[] | if (.port_results | length) > 0 then .port_results[].status else .status end] | group_by(.)[] | "- \(.[0]): \(length)"' "$output_dir/results.json"
     echo
     echo '## Ports'
     echo
     echo '| Namespace | Pod | Port | Status | TLS 1.3 | ML-KEM |'
     echo '| --- | --- | ---: | --- | --- | --- |'
-    jq -r '.ip_results[] | . as $ip | (.port_results // [])[] | "| \($ip.pod.Namespace // "-") | \($ip.pod.Name // "-") | \(.port) | \(.status) | \(if .tls13_supported then "yes" else "-" end) | \(if .mlkem_supported then "yes" else "-" end) |"' "$output_dir/results.json"
+    jq -r '.ip_results[] | . as $ip | if (.port_results | length) > 0 then .port_results[] | "| \($ip.pod.Namespace // "-") | \($ip.pod.Name // "-") | \(.port) | \(.status) | \(if .tls13_supported then "yes" else "-" end) | \(if .mlkem_supported then "yes" else "-" end) |" else "| \($ip.pod.Namespace // "-") | \($ip.pod.Name // "-") | - | \($ip.status) | - | - |" end' "$output_dir/results.json"
+    echo
+    echo '## TLS profile adherence scan status counts'
+    echo
+    jq -r '[.ip_results[] | if (.port_results | length) > 0 then .port_results[].status else .status end] | group_by(.)[] | "- \(.[0]): \(length)"' "$output_dir/adherence/results.json"
+    echo
+    echo '| Namespace | Pod | Port | Status | Profile | Version | Ciphers |'
+    echo '| --- | --- | ---: | --- | --- | --- | --- |'
+    jq -r '.ip_results[] | . as $ip | (.port_results // [])[] | .api_server_tls_config_compliance as $check | "| \($ip.pod.Namespace // "-") | \($ip.pod.Name // "-") | \(.port) | \(.status) | \($check.configured_profile // "-") | \(if $check == null then "-" elif $check.version then "yes" else "no" end) | \(if $check == null then "-" elif $check.ciphers then "yes" else "no" end) |"' "$output_dir/adherence/results.json"
+    echo
+    echo 'See `adherence/results.json` and `adherence/results.csv` for the full compliance details.'
     echo
     echo 'NO_TLS, FILTERED, and NO_PORTS need review: network policy and pod security can hide TLS listeners from the scanner.'
 } > "$output_dir/report.md"
 
-cp "$output_dir"/{results.json,results.csv,results.xml,scan.log,job.log,exit-code} "$output_root/"
+cp "$output_dir"/{results.json,results.csv,results.xml,scan.log,job.log,exit-code,pqc-exit-code,adherence-exit-code} "$output_root/"
+mkdir -p "$output_root/adherence"
+cp "$output_dir"/adherence/{results.json,results.csv,results.xml,scan.log} "$output_root/adherence/"
 cp "$output_dir/report.md" "$output_root/report.md"
 
 cat "$output_dir/report.md"
-echo "Reports: $output_dir (JSON, CSV, JUnit, scanner log, Job log)"
+echo "Reports: $output_dir (PQC and adherence JSON, CSV, JUnit, logs)"
 echo "Latest report: $output_root/report.md"
 exit "$scanner_exit"
